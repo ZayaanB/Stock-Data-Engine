@@ -1,0 +1,86 @@
+cmake_minimum_required(VERSION 3.20)
+project(itch_order_book VERSION 1.0.0 LANGUAGES CXX)
+
+option(ITCH_ENABLE_SANITIZERS "Enable address and undefined behavior sanitizers" OFF)
+option(ITCH_NATIVE_ARCH "Build optimized binaries for the current CPU" OFF)
+option(ITCH_FETCH_DEPS "Fetch GoogleTest and Google Benchmark" OFF)
+
+if(ITCH_FETCH_DEPS)
+  include(FetchContent)
+  set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+  set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
+  FetchContent_Declare(
+    googletest
+    URL https://github.com/google/googletest/archive/refs/tags/v1.15.2.tar.gz
+    URL_HASH SHA256=7b42b4d6ed48810c5362c265a17faebe90dc2373c885e5216439d37927f02926
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+  FetchContent_Declare(
+    googlebenchmark
+    URL https://github.com/google/benchmark/archive/refs/tags/v1.9.1.tar.gz
+    URL_HASH SHA256=32131c08ee31eeff2c8968d7e874f3cb648034377dfc32a4c377fa8796d84981
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+  FetchContent_MakeAvailable(googletest googlebenchmark)
+endif()
+
+function(itch_enable_warnings target)
+  target_compile_options(${target} PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic;-Wconversion;-Wshadow>)
+endfunction()
+
+add_library(itch_engine
+    src/parser.cpp
+    src/order_book.cpp
+    src/replay.cpp)
+target_include_directories(itch_engine PUBLIC include)
+target_compile_features(itch_engine PUBLIC cxx_std_23)
+itch_enable_warnings(itch_engine)
+
+if(ITCH_NATIVE_ARCH)
+  target_compile_options(itch_engine PUBLIC -march=native)
+endif()
+if(ITCH_ENABLE_SANITIZERS)
+  target_compile_options(itch_engine PUBLIC -fsanitize=address,undefined -fno-omit-frame-pointer)
+  target_link_options(itch_engine PUBLIC -fsanitize=address,undefined)
+endif()
+
+add_executable(itch_order_book src/main.cpp)
+target_link_libraries(itch_order_book PRIVATE itch_engine)
+itch_enable_warnings(itch_order_book)
+
+add_executable(generate_feed tools/generate_feed.cpp)
+target_link_libraries(generate_feed PRIVATE itch_engine)
+itch_enable_warnings(generate_feed)
+
+add_executable(book_benchmark benchmarks/book_benchmark.cpp)
+target_link_libraries(book_benchmark PRIVATE itch_engine)
+itch_enable_warnings(book_benchmark)
+
+add_executable(lookup_policy_benchmark benchmarks/lookup_policy_benchmark.cpp)
+itch_enable_warnings(lookup_policy_benchmark)
+
+# Use the standard Google Benchmark runner when the package is available. The
+# dependency-free benchmark above remains available on minimal/offline systems.
+find_package(benchmark QUIET)
+if(TARGET benchmark::benchmark)
+  add_executable(google_book_benchmark benchmarks/google_book_benchmark.cpp)
+  target_link_libraries(google_book_benchmark PRIVATE itch_engine benchmark::benchmark)
+  itch_enable_warnings(google_book_benchmark)
+endif()
+
+enable_testing()
+add_executable(itch_tests tests/tests.cpp)
+target_link_libraries(itch_tests PRIVATE itch_engine)
+itch_enable_warnings(itch_tests)
+add_test(NAME itch_tests COMMAND itch_tests)
+
+find_package(GTest QUIET)
+if(TARGET GTest::gtest_main)
+  add_executable(itch_gtests tests/google_tests.cpp)
+  target_link_libraries(itch_gtests PRIVATE itch_engine GTest::gtest_main)
+  itch_enable_warnings(itch_gtests)
+  include(GoogleTest)
+  gtest_discover_tests(itch_gtests)
+endif()
+
+install(TARGETS itch_order_book generate_feed book_benchmark
+        lookup_policy_benchmark RUNTIME DESTINATION bin)
