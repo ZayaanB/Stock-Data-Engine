@@ -33,12 +33,23 @@
         "CMAKE_BUILD_TYPE": "Debug",
         "ITCH_ENABLE_SANITIZERS": "ON"
       }
+    },
+    {
+      "name": "thread-sanitize",
+      "displayName": "Debug with ThreadSanitizer",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build/thread-sanitize",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "ITCH_ENABLE_TSAN": "ON"
+      }
     }
   ],
   "buildPresets": [
     { "name": "release", "configurePreset": "release" },
     { "name": "native", "configurePreset": "native" },
-    { "name": "sanitize", "configurePreset": "sanitize" }
+    { "name": "sanitize", "configurePreset": "sanitize" },
+    { "name": "thread-sanitize", "configurePreset": "thread-sanitize" }
   ],
   "testPresets": [
     {
@@ -49,6 +60,11 @@
     {
       "name": "sanitize",
       "configurePreset": "sanitize",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "thread-sanitize",
+      "configurePreset": "thread-sanitize",
       "output": { "outputOnFailure": true }
     }
   ]

@@ -3,16 +3,23 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <map>
 #include <new>
 #include <random>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
 #include "book/order_book.hpp"
+#include "itch/moldudp64.hpp"
 #include "itch/parser.hpp"
+#include "queue/spsc_ring.hpp"
+#include "replay/pcap.hpp"
+#include "replay/replay.hpp"
 
 static std::atomic<std::uint64_t> allocation_count{0};
 void* operator new(std::size_t n) {
@@ -39,6 +46,13 @@ class Bytes {
   void u16(std::uint16_t value) {
     u8(static_cast<std::uint8_t>(value >> 8));
     u8(static_cast<std::uint8_t>(value));
+  }
+  void little_u16(std::uint16_t value) {
+    u8(static_cast<std::uint8_t>(value));
+    u8(static_cast<std::uint8_t>(value >> 8));
+  }
+  void little_u32(std::uint32_t value) {
+    for (int shift = 0; shift <= 24; shift += 8) u8(static_cast<std::uint8_t>(value >> shift));
   }
   void u32(std::uint32_t value) {
     for (int shift = 24; shift >= 0; shift -= 8) u8(static_cast<std::uint8_t>(value >> shift));
@@ -109,6 +123,14 @@ void parser_tests() {
   CHECK(called == 1);
   CHECK(itch::expected_message_length('S') == 12);
   CHECK(itch::expected_message_length('R') == 39);
+  CHECK(itch::expected_message_length('H') == 25);
+  CHECK(itch::expected_message_length('Y') == 20);
+  CHECK(itch::expected_message_length('L') == 26);
+  CHECK(itch::expected_message_length('V') == 35);
+  CHECK(itch::expected_message_length('W') == 12);
+  CHECK(itch::expected_message_length('K') == 28);
+  CHECK(itch::expected_message_length('J') == 35);
+  CHECK(itch::expected_message_length('h') == 21);
   CHECK(itch::expected_message_length('F') == 40);
   CHECK(itch::expected_message_length('E') == 31);
   CHECK(itch::expected_message_length('C') == 36);
@@ -117,14 +139,215 @@ void parser_tests() {
   CHECK(itch::expected_message_length('U') == 35);
   CHECK(itch::expected_message_length('P') == 44);
   CHECK(itch::expected_message_length('Q') == 40);
-  for (const char type : std::string("SRFECXDUPQ")) {
+  CHECK(itch::expected_message_length('B') == 19);
+  CHECK(itch::expected_message_length('I') == 50);
+  CHECK(itch::expected_message_length('N') == 20);
+  for (const char type : std::string("SRHYLVWKJhAFECXDUPQBIN")) {
     std::vector<std::byte> message(itch::expected_message_length(type));
     message[0] = static_cast<std::byte>(type);
-    if (type == 'F' || type == 'P') message[19] = std::byte{'B'};
+    if (type == 'A' || type == 'F' || type == 'P') message[19] = std::byte{'B'};
     CHECK(itch::parse_message(message));
   }
   std::array<std::byte, 1> unsupported{std::byte{'Z'}};
   CHECK(itch::parse_message(unsupported).error == itch::ParseError::unsupported_type);
+}
+
+void mold_tests() {
+  Bytes system_event;
+  system_event.header('S');
+  system_event.u8('O');
+
+  Bytes packet;
+  packet.chars("SESSION001", 10);
+  packet.u64(100);
+  packet.u16(2);
+  packet.u16(static_cast<std::uint16_t>(system_event.data.size()));
+  packet.data.insert(packet.data.end(), system_event.data.begin(), system_event.data.end());
+  packet.u16(static_cast<std::uint16_t>(system_event.data.size()));
+  packet.data.insert(packet.data.end(), system_event.data.begin(), system_event.data.end());
+
+  itch::MoldDecoder decoder;
+  std::uint64_t expected_sequence = 100;
+  std::size_t callbacks = 0;
+  const auto result =
+      decoder.decode(packet.data, [&](std::span<const std::byte> message, std::uint64_t sequence) {
+        CHECK(sequence == expected_sequence++);
+        CHECK(itch::parse_message(message));
+        ++callbacks;
+      });
+  CHECK(result);
+  CHECK(result.messages_decoded == 2);
+  CHECK(callbacks == 2);
+  const auto callbacks_before_gate = callbacks;
+  const auto gated = decoder.decode(
+      packet.data, [&](auto, auto) { ++callbacks; }, [](const itch::MoldHeader&) { return false; });
+  CHECK(gated);
+  CHECK(gated.messages_decoded == 0);
+  CHECK(callbacks == callbacks_before_gate);
+
+  itch::SequenceTracker tracker;
+  CHECK(tracker.observe(result.header).status == itch::SequenceStatus::initialized);
+  auto next = result.header;
+  next.sequence = 102;
+  CHECK(tracker.observe(next).status == itch::SequenceStatus::in_order);
+  next.sequence = 106;
+  const auto gap = tracker.observe(next);
+  CHECK(gap.status == itch::SequenceStatus::gap);
+  CHECK(gap.missing == 2);
+  next.sequence = 104;
+  CHECK(tracker.observe(next).status == itch::SequenceStatus::rewind);
+  next.session[0] = 'X';
+  CHECK(tracker.observe(next).status == itch::SequenceStatus::new_session);
+
+  auto truncated = packet.data;
+  truncated.pop_back();
+  CHECK(decoder.decode(truncated, [](auto, auto) {}).error == itch::MoldError::truncated_message);
+  auto trailing = packet.data;
+  trailing.push_back(std::byte{});
+  CHECK(decoder.decode(trailing, [](auto, auto) {}).error == itch::MoldError::trailing_bytes);
+
+  Bytes heartbeat;
+  heartbeat.chars("SESSION001", 10);
+  heartbeat.u64(102);
+  heartbeat.u16(0);
+  CHECK(decoder.decode(heartbeat.data, [](auto, auto) {}).header.heartbeat());
+  heartbeat.data.push_back(std::byte{});
+  CHECK(decoder.decode(heartbeat.data, [](auto, auto) {}).error ==
+        itch::MoldError::invalid_control_packet);
+
+  const auto ip_length = static_cast<std::uint16_t>(20 + 8 + packet.data.size());
+  const auto udp_length = static_cast<std::uint16_t>(8 + packet.data.size());
+  std::vector<std::byte> ethernet(14 + 20 + 8);
+  ethernet[12] = std::byte{0x08};
+  ethernet[13] = std::byte{0x00};
+  ethernet[14] = std::byte{0x45};
+  ethernet[16] = static_cast<std::byte>(ip_length >> 8);
+  ethernet[17] = static_cast<std::byte>(ip_length);
+  ethernet[23] = std::byte{17};
+  ethernet[38] = static_cast<std::byte>(udp_length >> 8);
+  ethernet[39] = static_cast<std::byte>(udp_length);
+  ethernet.insert(ethernet.end(), packet.data.begin(), packet.data.end());
+  const auto udp = replay::extract_udp_payload(ethernet, 1);
+  CHECK(udp);
+  CHECK(udp.bytes.size() == packet.data.size());
+  CHECK(decoder.decode(udp.bytes, [](auto, auto) {}));
+
+  Bytes pcap;
+  pcap.little_u32(0xa1b2c3d4);
+  pcap.little_u16(2);
+  pcap.little_u16(4);
+  pcap.little_u32(0);
+  pcap.little_u32(0);
+  pcap.little_u32(65'535);
+  pcap.little_u32(1);
+  pcap.little_u32(1);
+  pcap.little_u32(0);
+  pcap.little_u32(static_cast<std::uint32_t>(ethernet.size()));
+  pcap.little_u32(static_cast<std::uint32_t>(ethernet.size()));
+  pcap.data.insert(pcap.data.end(), ethernet.begin(), ethernet.end());
+  const auto path = std::filesystem::temp_directory_path() / "itch-pcap-test.pcap";
+  {
+    std::ofstream output(path, std::ios::binary);
+    output.write(reinterpret_cast<const char*>(pcap.data.data()),
+                 static_cast<std::streamsize>(pcap.data.size()));
+  }
+  replay::Config config;
+  config.symbol = "AAPL";
+  config.max_orders = 8;
+  config.max_levels = 8;
+  config.latency_samples = 0;
+  config.sample_every = 0;
+  replay::PcapStats stats;
+  const auto replay_result = replay::run_pcap(path, config, stats);
+  CHECK(replay_result.messages == 2);
+  CHECK(stats.packets == 1);
+  CHECK(stats.mold_packets == 1);
+  CHECK(stats.mold_messages == 2);
+  CHECK(stats.sequence_gaps == 0);
+  std::filesystem::remove(path);
+}
+
+void spsc_tests() {
+  queue::SpscRing<std::uint64_t, 8> small;
+  const auto allocations_before = allocation_count.load();
+  for (std::uint64_t value = 0; value < 8; ++value) CHECK(small.try_push(value));
+  CHECK(!small.try_push(9));
+  std::uint64_t output = 0;
+  for (std::uint64_t value = 0; value < 8; ++value) {
+    CHECK(small.try_pop(output));
+    CHECK(output == value);
+  }
+  CHECK(!small.try_pop(output));
+  CHECK(allocation_count.load() == allocations_before);
+
+  constexpr std::uint64_t count = 1'000'000;
+  queue::SpscRing<std::uint64_t, 1 << 12> concurrent;
+  std::thread producer([&] {
+    for (std::uint64_t value = 0; value < count; ++value)
+      while (!concurrent.try_push(value)) std::this_thread::yield();
+  });
+  for (std::uint64_t expected = 0; expected < count; ++expected) {
+    while (!concurrent.try_pop(output)) std::this_thread::yield();
+    CHECK(output == expected);
+  }
+  producer.join();
+  CHECK(concurrent.empty());
+}
+
+void threaded_replay_test() {
+  Bytes add;
+  add.header('A');
+  add.u64(42);
+  add.u8('B');
+  add.u32(500);
+  add.chars("AAPL    ", 8);
+  add.u32(1'842'100);
+  Bytes remove;
+  remove.header('D');
+  remove.u64(42);
+
+  Bytes file;
+  file.u16(static_cast<std::uint16_t>(add.data.size()));
+  file.data.insert(file.data.end(), add.data.begin(), add.data.end());
+  file.u16(static_cast<std::uint16_t>(remove.data.size()));
+  file.data.insert(file.data.end(), remove.data.begin(), remove.data.end());
+  const auto path = std::filesystem::temp_directory_path() / "itch-threaded-test.bin";
+  {
+    std::ofstream output(path, std::ios::binary);
+    output.write(reinterpret_cast<const char*>(file.data.data()),
+                 static_cast<std::streamsize>(file.data.size()));
+  }
+
+  replay::Config config;
+  config.symbol = "AAPL";
+  config.max_orders = 8;
+  config.max_levels = 8;
+  config.latency_samples = 0;
+  config.sample_every = 0;
+  const auto single = replay::run_file(path, config);
+  const auto threaded = replay::run_file_threaded(path, config);
+  CHECK(single.messages == threaded.messages);
+  CHECK(single.decoder.malformed == threaded.decoder.malformed);
+  CHECK(single.book.active_orders == threaded.book.active_orders);
+  CHECK(single.book.active_levels == threaded.book.active_levels);
+  CHECK(single.book.rejected == threaded.book.rejected);
+  CHECK(single.bid.price == threaded.bid.price);
+  CHECK(single.ask.price == threaded.ask.price);
+  std::filesystem::remove(path);
+}
+
+void malformed_fuzz_test() {
+  std::mt19937_64 random(0x49544348);
+  std::array<std::byte, 128> bytes{};
+  itch::MoldDecoder mold_decoder;
+  for (std::size_t iteration = 0; iteration < 100'000; ++iteration) {
+    const auto length = static_cast<std::size_t>(random() % bytes.size());
+    for (std::size_t index = 0; index < length; ++index)
+      bytes[index] = static_cast<std::byte>(random());
+    const auto input = std::span<const std::byte>(bytes.data(), length);
+    static_cast<void>(itch::parse_message(input));
+    static_cast<void>(mold_decoder.decode(input, [](auto, auto) {}));
+  }
 }
 
 void lifecycle_tests() {
@@ -280,6 +503,10 @@ void differential_test() {
 
 int main() {
   parser_tests();
+  mold_tests();
+  spsc_tests();
+  threaded_replay_test();
+  malformed_fuzz_test();
   lifecycle_tests();
   best_and_pool_tests();
   atomic_replace_test();
