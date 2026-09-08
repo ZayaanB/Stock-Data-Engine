@@ -4,12 +4,13 @@ A high-performance C++23 market data engine that decodes NASDAQ TotalView-ITCH m
 
 ## Measured performance
 
-Release build (`-O3 -DNDEBUG -march=native`), GCC 14.3.0, 13th Gen Intel Core i9-13900H, Linux 7.0.0. Measurements from 2026-09-03; results are machine- and workload-specific.
+Release build (`-O3 -DNDEBUG -march=native`), GCC 14.3.0, 13th Gen Intel Core i9-13900H, Linux 7.0.0. Measurements from 2026-09-03 and 2026-09-04; results are machine- and workload-specific.
 
 | Workload | Result |
 |---|---:|
 | Google Benchmark add/cancel | 58.19 M operations/s |
 | Framed mixed ITCH replay, 10M messages | 3.92 M messages/s (three-run median) |
+| Historical PCAP/MoldUDP64 replay, 20.29M messages | 3.15 M messages/s (three-run median) |
 | Replay latency p50 / p90 | 229 ns / 353 ns |
 | Replay latency p99 / p99.9 | 545 ns / 937 ns |
 
@@ -17,21 +18,22 @@ Latency sampled every tenth decoded message (1M samples). The replay ended with 
 
 ## Project status
 
-The core MVP is implemented and tested: recorded-file replay, all required decoders, lifecycle reconstruction, full depth, fixed-capacity memory, differential validation, benchmarks, documentation, and CI. Two PRD acceptance items require an external environment and are deliberately not claimed as complete:
+The full parser, order-book, recorded-file, PCAP/MoldUDP64, sequence-validation, and SPSC pipeline scope is implemented and tested. One PRD acceptance item remains blocked by this host and is deliberately not claimed as complete:
 
-- replay against a licensed or legally distributable historical NASDAQ ITCH sample;
 - hardware-counter results from a Linux host that permits `perf stat`.
 
-MoldUDP64/PCAP input and the SPSC reader pipeline are stretch milestones, not dependencies of the core engine.
+Historical validation used the public [Databento NASDAQ TotalView-ITCH sample](https://sample-pcaps-dl.databento.com/xnas/20230822/ny4-xnas-tvitch-a-20230822T133000.pcap.zst). Its 20,288,210 MoldUDP64 messages replay with zero sequence gaps, malformed packets, decoder errors, or rejected book events.
 
 The detailed requirement-by-requirement status is in [docs/audit.md](docs/audit.md).
 
 ## Architecture
 
 ```text
-binary ITCH file -> 1 MiB buffered reader -> framed decoder -> typed message
-                                                               |
-                                                               v
+binary ITCH file -> buffered reader -> framed decoder ---------+
+PCAP -> Ethernet/VLAN -> IPv4/UDP -> MoldUDP64 + sequencing ----+-> typed message
+                                                                |
+                              optional fixed SPSC queue --------+
+                                                                v
 fixed order pool <-> flat ID lookup <-> intrusive FIFO price levels
                                            |
                                   preallocated AVL trees
@@ -43,7 +45,7 @@ All capacity-owning vectors allocate in the `OrderBook` constructor. The steady-
 
 ## Supported ITCH 5.0 messages
 
-System Event (`S`), Stock Directory (`R`), Add Order (`A`), Add Order with MPID (`F`), Order Executed (`E`), Order Executed with Price (`C`), Order Cancel (`X`), Order Delete (`D`), Order Replace (`U`), Trade (`P`), and Cross Trade (`Q`). The decoder validates exact wire lengths, converts big-endian integer fields explicitly, rejects invalid sides, and safely carries partial frames between reads.
+All 22 TotalView-ITCH 5.0 message types are decoded: System Event (`S`), Stock Directory (`R`), Stock Trading Action (`H`), Reg SHO (`Y`), Market Participant Position (`L`), MWCB levels/status (`V`/`W`), IPO Quoting Period (`K`), LULD Auction Collar (`J`), Operational Halt (`h`), Add Order (`A`/`F`), Execute (`E`/`C`), Cancel (`X`), Delete (`D`), Replace (`U`), Trade (`P`), Cross Trade (`Q`), Broken Trade (`B`), NOII (`I`), and Retail Price Improvement (`N`). The decoder validates exact wire lengths, converts big-endian integer fields explicitly, rejects invalid sides, and safely carries partial frames between reads.
 
 ## Build and test
 
@@ -53,7 +55,7 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-The offline test executable has no downloaded dependencies. To fetch the pinned GoogleTest and Google Benchmark releases and build their targets, add `-DITCH_FETCH_DEPS=ON`. Tests cover every supported parser type, malformed and fragmented frames, FIFO behavior, lifecycle operations, depth, level removal, pool exhaustion, a fixed-seed 20K-event differential run, and an instrumented 100K-cycle proof of zero hot-path allocations. GitHub Actions runs Debug/ASan/UBSan and Release configurations.
+The offline test executable has no downloaded dependencies. To fetch the pinned GoogleTest and Google Benchmark releases and build their targets, add `-DITCH_FETCH_DEPS=ON`. Tests cover every supported parser type, malformed and fragmented frames, FIFO behavior, lifecycle operations, depth, level removal, pool exhaustion, a fixed-seed 20K-event differential run, and an instrumented 100K-cycle proof of zero hot-path allocations. GitHub Actions runs Release, Debug/ASan/UBSan, and ThreadSanitizer configurations.
 
 ## Generate and replay a feed
 
@@ -63,9 +65,18 @@ The offline test executable has no downloaded dependencies. To fetch the pinned 
   --input /tmp/itch.bin --symbol AAPL \
   --max-orders 1500000 --max-levels 1000 \
   --sample-every 10 --latency-samples 1000000
+
+# Optional two-thread replay through the fixed SPSC queue
+./build/itch_order_book --input /tmp/itch.bin --symbol AAPL --threaded
+
+# Historical Ethernet/IPv4/UDP/MoldUDP64 PCAP replay
+zstd -d sample.pcap.zst -o sample.pcap
+./build/itch_order_book --input sample.pcap --format pcap --symbol AAPL
 ```
 
 `generate_feed` supports `mixed` and `sequential` workloads. The reader expects the standard recorded-file format: a two-byte big-endian message length followed by an ITCH message. `--symbol` is required because each CLI `OrderBook` instance represents one instrument; lifecycle events for filtered-out adds are ignored as unknown IDs.
+
+The PCAP reader supports classic little- or big-endian PCAP files containing Ethernet (including stacked VLAN tags) or raw IPv4, UDP, and MoldUDP64. It validates packet boundaries before dispatch and reports sequence gaps, rewinds, heartbeats, end-of-session packets, unsupported ITCH messages, and malformed transport data.
 
 ## Benchmark and profile
 
@@ -74,6 +85,7 @@ The offline test executable has no downloaded dependencies. To fetch the pinned 
 ./build/lookup_policy_benchmark 100000
 perf stat -e cycles,instructions,branches,branch-misses,cache-references,cache-misses \
   ./build/book_benchmark 10000000
+./tools/perf_stat.sh 10000000 ./build/book_benchmark 10000000
 ```
 
 For stable numbers: use a release build, pin to an isolated performance core (`taskset`), set the CPU governor appropriately, warm the binary, run multiple repetitions, and report the median plus compiler/CPU/kernel details. See [docs/benchmarks.md](docs/benchmarks.md) and [docs/optimizations.md](docs/optimizations.md).
@@ -84,8 +96,8 @@ For stable numbers: use a release build, pin to an isolated performance core (`t
 - Capacity is explicit. Pool or level exhaustion returns an error rather than allocating or corrupting state.
 - Price levels are balanced trees, giving O(log L) insert/remove and O(log L) best-price traversal without scanning empty price ranges.
 - ITCH prices remain integer fixed-point values (four decimal places), avoiding floating-point rounding.
-- Book mutation stays single-threaded. File input is buffered, but networking and MoldUDP64 are intentionally outside the core MVP.
+- Book mutation stays single-threaded. The optional reader thread communicates through a preallocated, lock-free SPSC ring with acquire/release publication.
 
 ## Resume-ready summary
 
-Built a C++23 NASDAQ ITCH market-data engine with allocation-free order processing, fixed-capacity hash lookup, intrusive FIFO price levels, and AVL-indexed depth. On the documented synthetic workload it replayed 10M framed messages at a three-run median 3.92M messages/s with 545 ns p99 sampled processing latency; measurements are reproducible with the commands above.
+Built a C++23 NASDAQ ITCH market-data engine with allocation-free order processing, fixed-capacity hash lookup, intrusive FIFO price levels, AVL-indexed depth, MoldUDP64 sequencing, PCAP ingestion, and a lock-free SPSC pipeline. Replayed a public 20.29M-message historical capture with zero gaps or rejected events at a three-run median 3.15M messages/s; measurements are reproducible with the commands above.

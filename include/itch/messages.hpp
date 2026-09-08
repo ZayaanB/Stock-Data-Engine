@@ -44,6 +44,49 @@ struct StockDirectory {
   std::uint32_t etp_leverage_factor{};
   char inverse_indicator{};
 };
+struct StockTradingAction {
+  Header header;
+  Stock stock{};
+  char trading_state{}, reserved{};
+  std::array<char, 4> reason{};
+};
+struct RegShoRestriction {
+  Header header;
+  Stock stock{};
+  char action{};
+};
+struct MarketParticipantPosition {
+  Header header;
+  std::array<char, 4> mpid{};
+  Stock stock{};
+  char primary_market_maker{}, market_maker_mode{}, market_participant_state{};
+};
+struct MwcbDeclineLevel {
+  Header header;
+  std::uint64_t level_one{}, level_two{}, level_three{};
+};
+struct MwcbStatus {
+  Header header;
+  char breached_level{};
+};
+struct IpoQuotingPeriod {
+  Header header;
+  Stock stock{};
+  std::uint32_t release_time{};
+  char release_qualifier{};
+  Price ipo_price{};
+};
+struct LuldAuctionCollar {
+  Header header;
+  Stock stock{};
+  Price reference_price{}, upper_price{}, lower_price{};
+  std::uint32_t extension{};
+};
+struct OperationalHalt {
+  Header header;
+  Stock stock{};
+  char action{};
+};
 struct AddOrder {
   Header header;
   OrderId order_id{};
@@ -97,10 +140,30 @@ struct CrossTrade {
   std::uint64_t match_number{};
   char cross_type{};
 };
+struct BrokenTrade {
+  Header header;
+  std::uint64_t match_number{};
+};
+struct Noii {
+  Header header;
+  std::uint64_t paired_quantity{}, imbalance_quantity{};
+  char imbalance_direction{};
+  Stock stock{};
+  Price far_price{}, near_price{}, current_reference_price{};
+  char cross_type{}, price_variation_indicator{};
+};
+struct RetailPriceImprovement {
+  Header header;
+  Stock stock{};
+  char interest_flag{};
+};
 
 using Message =
-    std::variant<SystemEvent, StockDirectory, AddOrder, AddOrderMpid, OrderExecuted,
-                 OrderExecutedWithPrice, OrderCancel, OrderDelete, OrderReplace, Trade, CrossTrade>;
+    std::variant<SystemEvent, StockDirectory, StockTradingAction, RegShoRestriction,
+                 MarketParticipantPosition, MwcbDeclineLevel, MwcbStatus, IpoQuotingPeriod,
+                 LuldAuctionCollar, OperationalHalt, AddOrder, AddOrderMpid, OrderExecuted,
+                 OrderExecutedWithPrice, OrderCancel, OrderDelete, OrderReplace, Trade, CrossTrade,
+                 BrokenTrade, Noii, RetailPriceImprovement>;
 
 enum class ParseError { none, empty, unsupported_type, wrong_length, invalid_side };
 struct ParseResult {

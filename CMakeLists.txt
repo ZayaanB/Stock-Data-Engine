@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.20)
 project(itch_order_book VERSION 1.0.0 LANGUAGES CXX)
 
 option(ITCH_ENABLE_SANITIZERS "Enable address and undefined behavior sanitizers" OFF)
+option(ITCH_ENABLE_TSAN "Enable the thread sanitizer" OFF)
 option(ITCH_NATIVE_ARCH "Build optimized binaries for the current CPU" OFF)
 option(ITCH_FETCH_DEPS "Fetch GoogleTest and Google Benchmark" OFF)
 
@@ -28,19 +29,28 @@ function(itch_enable_warnings target)
 endfunction()
 
 add_library(itch_engine
+    src/moldudp64.cpp
     src/parser.cpp
+    src/pcap.cpp
     src/order_book.cpp
     src/replay.cpp)
 target_include_directories(itch_engine PUBLIC include)
 target_compile_features(itch_engine PUBLIC cxx_std_23)
 itch_enable_warnings(itch_engine)
+find_package(Threads REQUIRED)
+target_link_libraries(itch_engine PUBLIC Threads::Threads)
 
 if(ITCH_NATIVE_ARCH)
   target_compile_options(itch_engine PUBLIC -march=native)
 endif()
-if(ITCH_ENABLE_SANITIZERS)
+if(ITCH_ENABLE_SANITIZERS AND ITCH_ENABLE_TSAN)
+  message(FATAL_ERROR "Address/undefined sanitizers cannot be combined with ThreadSanitizer")
+elseif(ITCH_ENABLE_SANITIZERS)
   target_compile_options(itch_engine PUBLIC -fsanitize=address,undefined -fno-omit-frame-pointer)
   target_link_options(itch_engine PUBLIC -fsanitize=address,undefined)
+elseif(ITCH_ENABLE_TSAN)
+  target_compile_options(itch_engine PUBLIC -fsanitize=thread -fno-omit-frame-pointer)
+  target_link_options(itch_engine PUBLIC -fsanitize=thread)
 endif()
 
 add_executable(itch_order_book src/main.cpp)
