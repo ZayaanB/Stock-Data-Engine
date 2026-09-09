@@ -28,8 +28,10 @@ struct Result {
   itch::DecoderStats decoder{};
   book::BookStats book{};
   book::Quote bid{}, ask{};
+  std::uint64_t producer_spins{}, consumer_spins{};
 };
 
 Result run_file(const std::filesystem::path&, const Config&);
+Result run_file_threaded(const std::filesystem::path&, const Config&);
 
 }  // namespace replay

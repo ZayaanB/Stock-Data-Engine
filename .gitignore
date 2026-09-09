@@ -3,6 +3,7 @@
 *.bin
 *.perf
 perf.data*
+/commit-and-push.log
 .cache/
 .vscode/
 .idea/

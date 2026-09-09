@@ -64,6 +64,22 @@ std::size_t expected_message_length(char t) noexcept {
       return 12;
     case 'R':
       return 39;
+    case 'H':
+      return 25;
+    case 'Y':
+      return 20;
+    case 'L':
+      return 26;
+    case 'V':
+      return 35;
+    case 'W':
+      return 12;
+    case 'K':
+      return 28;
+    case 'J':
+      return 35;
+    case 'h':
+      return 21;
     case 'A':
       return 36;
     case 'F':
@@ -82,6 +98,12 @@ std::size_t expected_message_length(char t) noexcept {
       return 44;
     case 'Q':
       return 40;
+    case 'B':
+      return 19;
+    case 'I':
+      return 50;
+    case 'N':
+      return 20;
     default:
       return 0;
   }
@@ -115,6 +137,68 @@ ParseResult parse_message(std::span<const std::byte> b) noexcept {
       m.etp_flag = static_cast<char>(r.u8());
       m.etp_leverage_factor = r.u32();
       m.inverse_indicator = static_cast<char>(r.u8());
+      return {ParseError::none, m};
+    }
+    case 'H': {
+      StockTradingAction m{};
+      m.header = h;
+      m.stock = r.chars<8>();
+      m.trading_state = static_cast<char>(r.u8());
+      m.reserved = static_cast<char>(r.u8());
+      m.reason = r.chars<4>();
+      return {ParseError::none, m};
+    }
+    case 'Y': {
+      RegShoRestriction m{};
+      m.header = h;
+      m.stock = r.chars<8>();
+      m.action = static_cast<char>(r.u8());
+      return {ParseError::none, m};
+    }
+    case 'L': {
+      MarketParticipantPosition m{};
+      m.header = h;
+      m.mpid = r.chars<4>();
+      m.stock = r.chars<8>();
+      m.primary_market_maker = static_cast<char>(r.u8());
+      m.market_maker_mode = static_cast<char>(r.u8());
+      m.market_participant_state = static_cast<char>(r.u8());
+      return {ParseError::none, m};
+    }
+    case 'V': {
+      MwcbDeclineLevel m{};
+      m.header = h;
+      m.level_one = r.u64();
+      m.level_two = r.u64();
+      m.level_three = r.u64();
+      return {ParseError::none, m};
+    }
+    case 'W':
+      return {ParseError::none, MwcbStatus{h, static_cast<char>(r.u8())}};
+    case 'K': {
+      IpoQuotingPeriod m{};
+      m.header = h;
+      m.stock = r.chars<8>();
+      m.release_time = r.u32();
+      m.release_qualifier = static_cast<char>(r.u8());
+      m.ipo_price = r.u32();
+      return {ParseError::none, m};
+    }
+    case 'J': {
+      LuldAuctionCollar m{};
+      m.header = h;
+      m.stock = r.chars<8>();
+      m.reference_price = r.u32();
+      m.upper_price = r.u32();
+      m.lower_price = r.u32();
+      m.extension = r.u32();
+      return {ParseError::none, m};
+    }
+    case 'h': {
+      OperationalHalt m{};
+      m.header = h;
+      m.stock = r.chars<8>();
+      m.action = static_cast<char>(r.u8());
       return {ParseError::none, m};
     }
     case 'A': {
@@ -197,6 +281,29 @@ ParseResult parse_message(std::span<const std::byte> b) noexcept {
       m.price = r.u32();
       m.match_number = r.u64();
       m.cross_type = static_cast<char>(r.u8());
+      return {ParseError::none, m};
+    }
+    case 'B':
+      return {ParseError::none, BrokenTrade{h, r.u64()}};
+    case 'I': {
+      Noii m{};
+      m.header = h;
+      m.paired_quantity = r.u64();
+      m.imbalance_quantity = r.u64();
+      m.imbalance_direction = static_cast<char>(r.u8());
+      m.stock = r.chars<8>();
+      m.far_price = r.u32();
+      m.near_price = r.u32();
+      m.current_reference_price = r.u32();
+      m.cross_type = static_cast<char>(r.u8());
+      m.price_variation_indicator = static_cast<char>(r.u8());
+      return {ParseError::none, m};
+    }
+    case 'N': {
+      RetailPriceImprovement m{};
+      m.header = h;
+      m.stock = r.chars<8>();
+      m.interest_flag = static_cast<char>(r.u8());
       return {ParseError::none, m};
     }
     default:
