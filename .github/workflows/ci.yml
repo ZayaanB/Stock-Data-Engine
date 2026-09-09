@@ -14,7 +14,7 @@ jobs:
         build_type: [Debug, Release]
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Configure
         run: >-
           cmake -S . -B build
@@ -27,11 +27,19 @@ jobs:
         env:
           ASAN_OPTIONS: detect_leaks=1
         run: ctest --test-dir build --output-on-failure
+      - name: Verify installed package
+        if: matrix.build_type == 'Release'
+        run: |
+          cmake --install build --prefix "$RUNNER_TEMP/itch-order-book"
+          cmake -S tests/package_consumer -B consumer-build \
+            -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/itch-order-book"
+          cmake --build consumer-build --parallel 2
+          ./consumer-build/itch_package_consumer
 
   thread-sanitizer:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Configure
         run: >-
           cmake -S . -B build

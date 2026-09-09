@@ -1,5 +1,8 @@
 # High-Performance NASDAQ ITCH Market Data & Order Book Engine
 
+[![CI](https://github.com/ZayaanB/Stock-Data-Engine/actions/workflows/ci.yml/badge.svg)](https://github.com/ZayaanB/Stock-Data-Engine/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 A high-performance C++23 market data engine that decodes NASDAQ TotalView-ITCH messages and reconstructs a full-depth electronic limit order book. The system is designed around preallocated memory and cache-efficient data structures to minimize processing latency and sustain millions of market updates per second.
 
 ## Measured performance
@@ -56,6 +59,23 @@ ctest --test-dir build --output-on-failure
 ```
 
 The offline test executable has no downloaded dependencies. To fetch the pinned GoogleTest and Google Benchmark releases and build their targets, add `-DITCH_FETCH_DEPS=ON`. Tests cover every supported parser type, malformed and fragmented frames, FIFO behavior, lifecycle operations, depth, level removal, pool exhaustion, a fixed-seed 20K-event differential run, and an instrumented 100K-cycle proof of zero hot-path allocations. GitHub Actions runs Release, Debug/ASan/UBSan, and ThreadSanitizer configurations.
+
+## Install and consume as a library
+
+```bash
+cmake --install build --prefix /tmp/itch-order-book
+```
+
+Downstream CMake projects can then use the exported target:
+
+```cmake
+find_package(itch_order_book 1 CONFIG REQUIRED)
+target_link_libraries(my_application PRIVATE ItchOrderBook::Engine)
+```
+
+Point CMake at a non-system installation with
+`-DCMAKE_PREFIX_PATH=/tmp/itch-order-book`. The install also includes the
+`itch_order_book`, `generate_feed`, and benchmark executables.
 
 ## Generate and replay a feed
 

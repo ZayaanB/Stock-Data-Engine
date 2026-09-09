@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
 project(itch_order_book VERSION 1.0.0 LANGUAGES CXX)
 
+include(GNUInstallDirs)
+
 option(ITCH_ENABLE_SANITIZERS "Enable address and undefined behavior sanitizers" OFF)
 option(ITCH_ENABLE_TSAN "Enable the thread sanitizer" OFF)
 option(ITCH_NATIVE_ARCH "Build optimized binaries for the current CPU" OFF)
@@ -34,7 +36,13 @@ add_library(itch_engine
     src/pcap.cpp
     src/order_book.cpp
     src/replay.cpp)
-target_include_directories(itch_engine PUBLIC include)
+add_library(ItchOrderBook::Engine ALIAS itch_engine)
+set_target_properties(itch_engine PROPERTIES EXPORT_NAME Engine)
+target_include_directories(
+  itch_engine
+  PUBLIC
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
+    "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
 target_compile_features(itch_engine PUBLIC cxx_std_23)
 itch_enable_warnings(itch_engine)
 find_package(Threads REQUIRED)
@@ -92,5 +100,35 @@ if(TARGET GTest::gtest_main)
   gtest_discover_tests(itch_gtests)
 endif()
 
-install(TARGETS itch_order_book generate_feed book_benchmark
-        lookup_policy_benchmark RUNTIME DESTINATION bin)
+install(
+  TARGETS itch_engine
+  EXPORT itch_order_bookTargets
+  ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+  LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+  RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+  INCLUDES DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
+install(
+  TARGETS itch_order_book generate_feed book_benchmark lookup_policy_benchmark
+  RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+install(DIRECTORY include/ DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
+
+include(CMakePackageConfigHelpers)
+set(itch_order_book_cmake_dir "${CMAKE_INSTALL_LIBDIR}/cmake/itch_order_book")
+configure_package_config_file(
+  cmake/itch_order_bookConfig.cmake.in
+  "${CMAKE_CURRENT_BINARY_DIR}/itch_order_bookConfig.cmake"
+  INSTALL_DESTINATION "${itch_order_book_cmake_dir}")
+write_basic_package_version_file(
+  "${CMAKE_CURRENT_BINARY_DIR}/itch_order_bookConfigVersion.cmake"
+  VERSION "${PROJECT_VERSION}"
+  COMPATIBILITY SameMajorVersion)
+install(
+  EXPORT itch_order_bookTargets
+  FILE itch_order_bookTargets.cmake
+  NAMESPACE ItchOrderBook::
+  DESTINATION "${itch_order_book_cmake_dir}")
+install(
+  FILES
+    "${CMAKE_CURRENT_BINARY_DIR}/itch_order_bookConfig.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/itch_order_bookConfigVersion.cmake"
+  DESTINATION "${itch_order_book_cmake_dir}")
