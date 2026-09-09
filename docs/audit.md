@@ -32,4 +32,4 @@ Audited on 2026-09-04 against the supplied product requirements.
 - Concurrent million-item SPSC FIFO stress test; ThreadSanitizer configuration is included in CI.
 - 100K deterministic malformed-byte fuzz cases for both ITCH and MoldUDP64 decoders.
 
-The source tree is ready to commit on branch `zayaan/feat/order-engine`. The only incomplete acceptance evidence is Linux hardware-counter output, which cannot be collected while the audit host enforces `perf_event_paranoid=4`.
+The source tree is ready to merge. The only incomplete acceptance evidence is Linux hardware-counter output, which cannot be collected while the audit host enforces `perf_event_paranoid=4`.
