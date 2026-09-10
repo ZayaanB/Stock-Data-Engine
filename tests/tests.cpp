@@ -22,13 +22,13 @@
 #include "replay/replay.hpp"
 
 static std::atomic<std::uint64_t> allocation_count{0};
-void* operator new(std::size_t n) {
+[[gnu::noinline]] void* operator new(std::size_t n) {
   ++allocation_count;
   if (void* p = std::malloc(n)) return p;
   throw std::bad_alloc();
 }
-void operator delete(void* p) noexcept { std::free(p); }
-void operator delete(void* p, std::size_t) noexcept { std::free(p); }
+[[gnu::noinline]] void operator delete(void* p) noexcept { std::free(p); }
+[[gnu::noinline]] void operator delete(void* p, std::size_t) noexcept { std::free(p); }
 
 namespace {
 int failures = 0;
@@ -224,12 +224,18 @@ void mold_tests() {
   ethernet[16] = static_cast<std::byte>(ip_length >> 8);
   ethernet[17] = static_cast<std::byte>(ip_length);
   ethernet[23] = std::byte{17};
+  ethernet[34] = std::byte{0x04};
+  ethernet[35] = std::byte{0xd2};
+  ethernet[36] = std::byte{0x46};
+  ethernet[37] = std::byte{0x50};
   ethernet[38] = static_cast<std::byte>(udp_length >> 8);
   ethernet[39] = static_cast<std::byte>(udp_length);
   ethernet.insert(ethernet.end(), packet.data.begin(), packet.data.end());
   const auto udp = replay::extract_udp_payload(ethernet, 1);
   CHECK(udp);
   CHECK(udp.bytes.size() == packet.data.size());
+  CHECK(udp.source_port == 1234);
+  CHECK(udp.destination_port == 18'000);
   CHECK(decoder.decode(udp.bytes, [](auto, auto) {}));
 
   Bytes pcap;
@@ -264,7 +270,123 @@ void mold_tests() {
   CHECK(stats.mold_packets == 1);
   CHECK(stats.mold_messages == 2);
   CHECK(stats.sequence_gaps == 0);
+
+  replay::PcapStats filtered_stats;
+  const auto filtered =
+      replay::run_pcap(path, config, filtered_stats, {.destination_port = 18'001});
+  CHECK(filtered.messages == 0);
+  CHECK(filtered_stats.filtered_packets == 1);
+
+  Bytes pcapng;
+  pcapng.little_u32(0x0a0d0d0a);
+  pcapng.little_u32(28);
+  pcapng.little_u32(0x1a2b3c4d);
+  pcapng.little_u16(1);
+  pcapng.little_u16(0);
+  pcapng.little_u32(0xffffffff);
+  pcapng.little_u32(0xffffffff);
+  pcapng.little_u32(28);
+  pcapng.little_u32(1);
+  pcapng.little_u32(20);
+  pcapng.little_u16(1);
+  pcapng.little_u16(0);
+  pcapng.little_u32(65'535);
+  pcapng.little_u32(20);
+  pcapng.little_u32(0x12345678);
+  pcapng.little_u32(12);
+  pcapng.little_u32(12);
+  const auto padded_packet_size = (ethernet.size() + 3U) & ~std::size_t{3};
+  const auto enhanced_block_size = static_cast<std::uint32_t>(32 + padded_packet_size);
+  pcapng.little_u32(6);
+  pcapng.little_u32(enhanced_block_size);
+  pcapng.little_u32(0);
+  pcapng.little_u32(0);
+  pcapng.little_u32(0);
+  pcapng.little_u32(static_cast<std::uint32_t>(ethernet.size()));
+  pcapng.little_u32(static_cast<std::uint32_t>(ethernet.size()));
+  pcapng.data.insert(pcapng.data.end(), ethernet.begin(), ethernet.end());
+  while (pcapng.data.size() % 4 != 0) pcapng.u8(0);
+  pcapng.little_u32(enhanced_block_size);
+  const auto pcapng_path = std::filesystem::temp_directory_path() / "itch-pcapng-test.pcapng";
+  {
+    std::ofstream output(pcapng_path, std::ios::binary);
+    output.write(reinterpret_cast<const char*>(pcapng.data.data()),
+                 static_cast<std::streamsize>(pcapng.data.size()));
+  }
+
+  replay::PcapStats pcapng_stats;
+  const auto pcapng_result =
+      replay::run_pcap(pcapng_path, config, pcapng_stats, {.destination_port = 18'000});
+  CHECK(pcapng_result.messages == replay_result.messages);
+  CHECK(pcapng_result.book.active_orders == replay_result.book.active_orders);
+  CHECK(pcapng_stats.filtered_packets == 0);
+
+  Bytes big_endian_pcapng;
+  big_endian_pcapng.u32(0x0a0d0d0a);
+  big_endian_pcapng.u32(28);
+  big_endian_pcapng.u32(0x1a2b3c4d);
+  big_endian_pcapng.u16(1);
+  big_endian_pcapng.u16(0);
+  big_endian_pcapng.u64(0xffffffffffffffffULL);
+  big_endian_pcapng.u32(28);
+  big_endian_pcapng.u32(1);
+  big_endian_pcapng.u32(20);
+  big_endian_pcapng.u16(1);
+  big_endian_pcapng.u16(0);
+  big_endian_pcapng.u32(65'535);
+  big_endian_pcapng.u32(20);
+  big_endian_pcapng.u32(6);
+  big_endian_pcapng.u32(enhanced_block_size);
+  big_endian_pcapng.u32(0);
+  big_endian_pcapng.u32(0);
+  big_endian_pcapng.u32(0);
+  big_endian_pcapng.u32(static_cast<std::uint32_t>(ethernet.size()));
+  big_endian_pcapng.u32(static_cast<std::uint32_t>(ethernet.size()));
+  big_endian_pcapng.data.insert(big_endian_pcapng.data.end(), ethernet.begin(), ethernet.end());
+  while (big_endian_pcapng.data.size() % 4 != 0) big_endian_pcapng.u8(0);
+  big_endian_pcapng.u32(enhanced_block_size);
+  const auto big_endian_path =
+      std::filesystem::temp_directory_path() / "itch-pcapng-big-endian-test.pcapng";
+  {
+    std::ofstream output(big_endian_path, std::ios::binary);
+    output.write(reinterpret_cast<const char*>(big_endian_pcapng.data.data()),
+                 static_cast<std::streamsize>(big_endian_pcapng.data.size()));
+  }
+  replay::PcapStats big_endian_stats;
+  const auto big_endian_result = replay::run_pcap(big_endian_path, config, big_endian_stats);
+  CHECK(big_endian_result.messages == pcapng_result.messages);
+  CHECK(big_endian_stats.mold_messages == pcapng_stats.mold_messages);
+
+  replay::PcapStats threaded_stats;
+  const auto threaded_result =
+      replay::run_pcap_threaded(pcapng_path, config, threaded_stats, {.source_port = 1234});
+  CHECK(threaded_result.messages == pcapng_result.messages);
+  CHECK(threaded_result.book.active_orders == pcapng_result.book.active_orders);
+  CHECK(threaded_result.bid.price == pcapng_result.bid.price);
+  CHECK(threaded_result.ask.price == pcapng_result.ask.price);
+  CHECK(threaded_stats.mold_messages == pcapng_stats.mold_messages);
+
+  auto malformed_pcapng = pcapng.data;
+  malformed_pcapng.pop_back();
+  const auto malformed_path = std::filesystem::temp_directory_path() / "itch-malformed-test.pcapng";
+  {
+    std::ofstream output(malformed_path, std::ios::binary);
+    output.write(reinterpret_cast<const char*>(malformed_pcapng.data()),
+                 static_cast<std::streamsize>(malformed_pcapng.size()));
+  }
+  bool producer_error_propagated = false;
+  try {
+    replay::PcapStats malformed_stats;
+    static_cast<void>(replay::run_pcap_threaded(malformed_path, config, malformed_stats));
+  } catch (const std::runtime_error&) {
+    producer_error_propagated = true;
+  }
+  CHECK(producer_error_propagated);
+
   std::filesystem::remove(path);
+  std::filesystem::remove(pcapng_path);
+  std::filesystem::remove(big_endian_path);
+  std::filesystem::remove(malformed_path);
 }
 
 void spsc_tests() {

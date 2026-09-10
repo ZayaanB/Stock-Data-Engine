@@ -43,13 +43,25 @@
         "CMAKE_BUILD_TYPE": "Debug",
         "ITCH_ENABLE_TSAN": "ON"
       }
+    },
+    {
+      "name": "fuzz",
+      "displayName": "Clang libFuzzer",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build/fuzz",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "ITCH_BUILD_FUZZERS": "ON"
+      }
     }
   ],
   "buildPresets": [
     { "name": "release", "configurePreset": "release" },
     { "name": "native", "configurePreset": "native" },
     { "name": "sanitize", "configurePreset": "sanitize" },
-    { "name": "thread-sanitize", "configurePreset": "thread-sanitize" }
+    { "name": "thread-sanitize", "configurePreset": "thread-sanitize" },
+    { "name": "fuzz", "configurePreset": "fuzz" }
   ],
   "testPresets": [
     {

@@ -11,7 +11,9 @@ void usage() {
   std::cout << "Usage: itch_order_book --input FILE [options]\n"
                "Options:\n"
                "  --symbol SYMBOL       Required; process one symbol (maximum 8 characters)\n"
-               "  --format FORMAT       Input format: itch (default) or pcap\n"
+               "  --format FORMAT       Input format: itch (default), pcap, or pcapng\n"
+               "  --source-port N       Only process PCAP packets from UDP source port N\n"
+               "  --destination-port N  Only process PCAP packets to UDP destination port N\n"
                "  --max-orders N        Preallocated order capacity\n"
                "  --max-levels N        Preallocated price-level capacity\n"
                "  --sample-every N      Time every Nth message; 0 disables sampling\n"
@@ -38,6 +40,7 @@ int main(int argc, char** argv) {
   std::string input;
   std::string format = "itch";
   bool threaded = false;
+  replay::PcapFilter pcap_filter;
 
   try {
     for (int index = 1; index < argc; ++index) {
@@ -53,7 +56,15 @@ int main(int argc, char** argv) {
         config.symbol = value();
       else if (argument == "--format")
         format = value();
-      else if (argument == "--max-orders")
+      else if (argument == "--source-port") {
+        const auto port = std::stoul(std::string(value()));
+        if (port == 0 || port > 65'535) throw std::invalid_argument("invalid source port");
+        pcap_filter.source_port = static_cast<std::uint16_t>(port);
+      } else if (argument == "--destination-port") {
+        const auto port = std::stoul(std::string(value()));
+        if (port == 0 || port > 65'535) throw std::invalid_argument("invalid destination port");
+        pcap_filter.destination_port = static_cast<std::uint16_t>(port);
+      } else if (argument == "--max-orders")
         config.max_orders = std::stoull(std::string(value()));
       else if (argument == "--max-levels")
         config.max_levels = std::stoull(std::string(value()));
@@ -79,15 +90,19 @@ int main(int argc, char** argv) {
     }
     if (config.symbol.empty())
       throw std::invalid_argument("--symbol is required for a single-book replay");
+    if (format == "pcapng") format = "pcap";
     if (format != "itch" && format != "pcap")
-      throw std::invalid_argument("--format must be 'itch' or 'pcap'");
-    if (threaded && format == "pcap")
-      throw std::invalid_argument("--threaded currently supports framed ITCH files only");
+      throw std::invalid_argument("--format must be 'itch', 'pcap', or 'pcapng'");
+    if (format == "itch" && (pcap_filter.source_port != 0 || pcap_filter.destination_port != 0))
+      throw std::invalid_argument("UDP port filters require PCAP input");
 
     replay::PcapStats pcap_stats{};
-    const auto result = format == "pcap" ? replay::run_pcap(input, config, pcap_stats)
-                        : threaded       ? replay::run_file_threaded(input, config)
-                                         : replay::run_file(input, config);
+    const auto result = format == "pcap" && threaded
+                            ? replay::run_pcap_threaded(input, config, pcap_stats, pcap_filter)
+                        : format == "pcap"
+                            ? replay::run_pcap(input, config, pcap_stats, pcap_filter)
+                        : threaded ? replay::run_file_threaded(input, config)
+                                   : replay::run_file(input, config);
     std::cout << std::fixed << std::setprecision(2) << "Messages processed: " << result.messages
               << "\nProcessing time: " << result.seconds
               << " sec\nThroughput: " << result.messages_per_second / 1e6
@@ -108,6 +123,7 @@ int main(int argc, char** argv) {
       std::cout << "PCAP packets: " << pcap_stats.packets
                 << "\nMoldUDP64 packets: " << pcap_stats.mold_packets
                 << "\nMoldUDP64 messages: " << pcap_stats.mold_messages
+                << "\nFiltered UDP packets: " << pcap_stats.filtered_packets
                 << "\nSequence gaps: " << pcap_stats.sequence_gaps
                 << "\nMissing messages: " << pcap_stats.missing_messages
                 << "\nSequence rewinds: " << pcap_stats.sequence_rewinds

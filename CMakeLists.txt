@@ -7,6 +7,7 @@ option(ITCH_ENABLE_SANITIZERS "Enable address and undefined behavior sanitizers"
 option(ITCH_ENABLE_TSAN "Enable the thread sanitizer" OFF)
 option(ITCH_NATIVE_ARCH "Build optimized binaries for the current CPU" OFF)
 option(ITCH_FETCH_DEPS "Fetch GoogleTest and Google Benchmark" OFF)
+option(ITCH_BUILD_FUZZERS "Build libFuzzer targets (Clang only)" OFF)
 
 if(ITCH_FETCH_DEPS)
   include(FetchContent)
@@ -98,6 +99,23 @@ if(TARGET GTest::gtest_main)
   itch_enable_warnings(itch_gtests)
   include(GoogleTest)
   gtest_discover_tests(itch_gtests)
+endif()
+
+if(ITCH_BUILD_FUZZERS)
+  if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    message(FATAL_ERROR "ITCH_BUILD_FUZZERS requires Clang")
+  endif()
+  target_compile_options(
+    itch_engine PRIVATE -fsanitize=fuzzer-no-link,address,undefined
+                        -fno-omit-frame-pointer)
+  target_link_options(itch_engine INTERFACE -fsanitize=address,undefined)
+  add_executable(itch_decoder_fuzzer fuzz/fuzz_decoders.cpp)
+  target_link_libraries(itch_decoder_fuzzer PRIVATE itch_engine)
+  target_compile_options(
+    itch_decoder_fuzzer PRIVATE -fsanitize=fuzzer,address,undefined
+                                  -fno-omit-frame-pointer)
+  target_link_options(itch_decoder_fuzzer PRIVATE -fsanitize=fuzzer,address,undefined)
+  itch_enable_warnings(itch_decoder_fuzzer)
 endif()
 
 install(
