@@ -1,6 +1,6 @@
 # PRD completion audit
 
-Audited on 2026-09-04 against the supplied product requirements.
+Audited on 2026-09-09 against the supplied product requirements.
 
 | Area | Status | Evidence |
 |---|---|---|
@@ -18,7 +18,7 @@ Audited on 2026-09-04 against the supplied product requirements.
 | Release, sanitizer, and CI validation | Complete | Warning-free GCC build, ASan/UBSan, Valgrind replay, and GitHub Actions workflow. |
 | Historical NASDAQ sample replay | Complete | Public 2023-08-22 Databento sample: 20,288,210 MoldUDP64 messages with zero gaps, malformed packets, or rejected events. |
 | Linux `perf` CPU counters | Blocked on audit host | `perf_event_paranoid=4` denies hardware events. Exact collection command is documented. |
-| MoldUDP64, PCAP, SPSC pipeline | Complete | Transactional Mold decoder, sequence tracker, classic PCAP/Ethernet/VLAN/IPv4/UDP input, and fixed 65,536-entry SPSC queue. |
+| MoldUDP64, capture, SPSC pipeline | Complete | Transactional Mold decoder, sequence tracker, PCAP/PCAP-NG with UDP filtering, and fixed 65,536-entry threaded SPSC queue. |
 
 ## Verification performed
 
@@ -31,5 +31,7 @@ Audited on 2026-09-04 against the supplied product requirements.
 - Historical 20.29M-message PCAP replay with externally published message-count cross-check.
 - Concurrent million-item SPSC FIFO stress test; ThreadSanitizer configuration is included in CI.
 - 100K deterministic malformed-byte fuzz cases for both ITCH and MoldUDP64 decoders.
+- Clang libFuzzer target with ASan/UBSan instrumentation and CI smoke coverage.
+- Equivalent single-threaded and SPSC-threaded PCAP-NG replay tests.
 
 The source tree is ready to merge. The only incomplete acceptance evidence is Linux hardware-counter output, which cannot be collected while the audit host enforces `perf_event_paranoid=4`.

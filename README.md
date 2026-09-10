@@ -21,7 +21,7 @@ Latency sampled every tenth decoded message (1M samples). The replay ended with 
 
 ## Project status
 
-The full parser, order-book, recorded-file, PCAP/MoldUDP64, sequence-validation, and SPSC pipeline scope is implemented and tested. One PRD acceptance item remains blocked by this host and is deliberately not claimed as complete:
+The full parser, order-book, recorded-file, PCAP/PCAP-NG/MoldUDP64, sequence-validation, UDP filtering, and SPSC pipeline scope is implemented and tested. One PRD acceptance item remains blocked by this host and is deliberately not claimed as complete:
 
 - hardware-counter results from a Linux host that permits `perf stat`.
 
@@ -33,7 +33,7 @@ The detailed requirement-by-requirement status is in [docs/audit.md](docs/audit.
 
 ```text
 binary ITCH file -> buffered reader -> framed decoder ---------+
-PCAP -> Ethernet/VLAN -> IPv4/UDP -> MoldUDP64 + sequencing ----+-> typed message
+PCAP/PCAP-NG -> Ethernet/VLAN -> IPv4/UDP -> MoldUDP64 --------+-> typed message
                                                                 |
                               optional fixed SPSC queue --------+
                                                                 v
@@ -89,14 +89,39 @@ Point CMake at a non-system installation with
 # Optional two-thread replay through the fixed SPSC queue
 ./build/itch_order_book --input /tmp/itch.bin --symbol AAPL --threaded
 
-# Historical Ethernet/IPv4/UDP/MoldUDP64 PCAP replay
+# Historical Ethernet/IPv4/UDP/MoldUDP64 PCAP or PCAP-NG replay
 zstd -d sample.pcap.zst -o sample.pcap
 ./build/itch_order_book --input sample.pcap --format pcap --symbol AAPL
+
+# Filter a mixed capture and place transport decoding on the producer thread
+./build/itch_order_book --input capture.pcapng --format pcapng --symbol AAPL \
+  --destination-port 18000 --threaded
 ```
 
 `generate_feed` supports `mixed` and `sequential` workloads. The reader expects the standard recorded-file format: a two-byte big-endian message length followed by an ITCH message. `--symbol` is required because each CLI `OrderBook` instance represents one instrument; lifecycle events for filtered-out adds are ignored as unknown IDs.
 
-The PCAP reader supports classic little- or big-endian PCAP files containing Ethernet (including stacked VLAN tags) or raw IPv4, UDP, and MoldUDP64. It validates packet boundaries before dispatch and reports sequence gaps, rewinds, heartbeats, end-of-session packets, unsupported ITCH messages, and malformed transport data.
+The capture reader auto-detects classic PCAP and PCAP-NG, including multiple
+PCAP-NG sections and interfaces. It supports little- or big-endian captures,
+Enhanced and Simple Packet Blocks, Ethernet with stacked VLAN tags, raw IPv4,
+UDP source/destination-port filters, and MoldUDP64. It validates boundaries
+before dispatch and reports filtered traffic, sequence gaps, rewinds,
+heartbeats, end-of-session packets, unsupported ITCH messages, and malformed
+transport data. With `--threaded`, capture and protocol decoding run on the
+producer while order-book mutation remains on the single consumer.
+
+## Fuzz malformed inputs
+
+The libFuzzer target instruments the ITCH, MoldUDP64, Ethernet, IPv4, and UDP
+decoders with AddressSanitizer and UndefinedBehaviorSanitizer:
+
+```bash
+cmake --preset fuzz
+cmake --build --preset fuzz
+./build/fuzz/itch_decoder_fuzzer -max_total_time=60
+```
+
+This target requires Clang. CI also runs a deterministic 100,000-input fuzz
+smoke test on every push and pull request.
 
 ## Benchmark and profile
 
@@ -120,4 +145,4 @@ For stable numbers: use a release build, pin to an isolated performance core (`t
 
 ## Resume-ready summary
 
-Built a C++23 NASDAQ ITCH market-data engine with allocation-free order processing, fixed-capacity hash lookup, intrusive FIFO price levels, AVL-indexed depth, MoldUDP64 sequencing, PCAP ingestion, and a lock-free SPSC pipeline. Replayed a public 20.29M-message historical capture with zero gaps or rejected events at a three-run median 3.15M messages/s; measurements are reproducible with the commands above.
+Built a C++23 NASDAQ ITCH market-data engine with allocation-free order processing, fixed-capacity hash lookup, intrusive FIFO price levels, AVL-indexed depth, MoldUDP64 sequencing, PCAP/PCAP-NG ingestion, UDP filtering, and a lock-free SPSC pipeline. Replayed a public 20.29M-message historical capture with zero gaps or rejected events at a three-run median 3.15M messages/s; measurements are reproducible with the commands above.

@@ -49,3 +49,18 @@ jobs:
         run: cmake --build build --parallel 2
       - name: Test
         run: ctest --test-dir build --output-on-failure
+
+  fuzz-smoke:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Configure
+        run: >-
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_CXX_COMPILER=clang++
+          -DITCH_BUILD_FUZZERS=ON
+      - name: Build
+        run: cmake --build build --target itch_decoder_fuzzer --parallel 2
+      - name: Fuzz smoke test
+        run: ./build/itch_decoder_fuzzer -runs=100000
